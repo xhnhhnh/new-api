@@ -126,11 +126,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
+	needPromptAudit := service.PromptAuditEnabled()
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
 	var meta *types.TokenCountMeta
-	if needSensitiveCheck || needCountToken {
+	if needPromptAudit || needSensitiveCheck || needCountToken {
 		meta = request.GetTokenCountMeta()
 	} else {
 		meta = fastTokenCountMetaForPricing(request)
@@ -180,6 +181,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
 		}
 	}()
+
+	if needPromptAudit {
+		if auditErr := service.AuditPrompt(c, relayInfo, request, meta); auditErr != nil {
+			newAPIError = types.NewErrorWithStatusCode(auditErr, types.ErrorCodePromptBlocked, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+			return
+		}
+	}
 
 	retryParam := &service.RetryParam{
 		Ctx:         c,
@@ -240,6 +248,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
 			break
+		}
+		// Channel affinity must only affect the first attempt: if the
+		// affinity-selected channel failed and retry is allowed, restart the
+		// priority walk from the highest priority (already-failed channels are
+		// excluded via use_channel). Otherwise the retry index would map to the
+		// affinity channel's own priority level and keep re-selecting it.
+		if retryParam.GetRetry() == 0 && service.IsChannelAffinityUsed(c) {
+			retryParam.ResetRetryNextTry()
 		}
 	}
 
@@ -569,6 +585,9 @@ func RelayTask(c *gin.Context) {
 
 		if !shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry()) {
 			break
+		}
+		if retryParam.GetRetry() == 0 && service.IsChannelAffinityUsed(c) {
+			retryParam.ResetRetryNextTry()
 		}
 	}
 

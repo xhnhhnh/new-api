@@ -239,6 +239,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 
 		for scanner.Scan() {
 			// 检查是否需要停止
+			// 不监听 c.Request.Context().Done()：客户端断连不应中断上游读取，
+			// 否则拿不到最后的 usage 事件（如 message_delta），导致计费缺失。
+			// 上游响应流会自然结束（EOF/[DONE]），streaming timeout 兜底防止无限阻塞。
 			select {
 			case <-stopChan:
 				return
@@ -290,15 +293,13 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	})
 
 	// 主循环等待完成或超时
+	// 不监听 c.Request.Context().Done()：客户端断连不应终止流程，
+	// scanner 会继续读完上游流拿到 usage，然后通过 stopChan 通知主循环退出。
 	select {
 	case <-ticker.C:
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
 	case <-stopChan:
 		// EndReason already set by the goroutine that triggered stopChan
-	case <-c.Request.Context().Done():
-		// 客户端断开：立即 cleanup 关闭上游 resp.Body，解除 scanner 阻塞并让上游停止生成，
-		// 避免为已放弃的请求继续消费上游 token。
-		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
 	}
 
 	cleanup()

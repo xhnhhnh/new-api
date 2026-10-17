@@ -6,6 +6,12 @@ DO NOT send optional commentary
 
 This is an AI API gateway/proxy built with Go. It aggregates 40+ upstream AI providers (OpenAI, Claude, Gemini, Azure, AWS Bedrock, etc.) behind a unified API, with user management, billing, rate limiting, and an admin dashboard.
 
+## Pull Requests
+
+- All PRs for this project are opened on the `xhnhhnh/new-api` fork (https://github.com/xhnhhnh/new-api/pull/new/...), targeting that fork's `main` branch by default.
+- Push feature/fix branches to the `fork` remote (`https://github.com/xhnhhnh/new-api.git`) and create the PR with `gh pr create --repo xhnhhnh/new-api`.
+- Do not push directly to `origin` (`zhengshuyun-com/new-api`) or open PRs against it; it requires different credentials/access.
+
 ## Tech Stack
 
 - **Backend**: Go 1.22+, Gin web framework, GORM v2 ORM
@@ -137,6 +143,20 @@ Do NOT directly import or call `encoding/json` in business code. `json.RawMessag
 - Frontend UI text must support i18n with `i18next`/`react-i18next`. Use flat JSON locale files in `web/src/i18n/locales/{lang}.json`, with English source strings as keys.
 - In React components, use `useTranslation()` and call `t('English key')` for user-facing text.
 - Follow `web/AGENTS.md` for detailed frontend conventions, including TypeScript, component structure, styling, accessibility, testing, and build checks.
+
+**Home navigation is an intentional full-page load — do not "fix" it to SPA routing:** In `web`, clicking the top-left brand logo (`src/components/layout/components/system-brand.tsx`, `inline` variant) and the top-nav "Home" item (`src/hooks/use-top-nav-links.ts` sets `hardReload: true`, rendered by `src/components/layout/components/top-nav.tsx`) MUST navigate to the site root `/` via a native `<a href="/">` full-page load, NOT a TanStack Router `<Link to="/">`. This is deliberate: it lets a reverse proxy (e.g. Nginx) intercept `/` and serve an external/company homepage instead of the SPA's in-app home route. When merging upstream, preserve this behavior — if upstream reverts these entries to `<Link>`/SPA navigation, re-apply the `<a href="/">` + `hardReload` approach. Do NOT change the `Console` item (`/dashboard`) or other in-app links; those must remain SPA `<Link>` navigation.
+
+**All visible fixed root links must use a full-page load:** Any visible link, logo, or button whose fixed destination is exactly `/` MUST use a native `<a href="/">` so the reverse proxy can handle the request. All non-root application links MUST preserve their existing SPA navigation behavior.
+
+### Local Customization Invariants
+
+**Docker image publishing:** The versioned Docker release flow MUST use `.github/workflows/docker-image-arm64.yml` with one QEMU-enabled job that builds `linux/amd64,linux/arm64` together and pushes only `zhengshuyun/new-api:${TAG}`. Do not reintroduce `.github/workflows/docker-build.yml` or `.github/workflows/docker-image-branch.yml`, per-architecture intermediate tags, cosign signing, provenance, or SBOM generation unless explicitly requested. `docker-compose.yml` MUST keep `image: zhengshuyun/new-api:latest`. When upstream changes the Dockerfile or frontend layout, adapt this single-job workflow instead of replacing it with the upstream publishing topology.
+
+**Prompt audit:** Preserve the prompt audit integration in `service/prompt_audit.go`, `controller/relay.go`, `main.go`, and `docs/prompt-audit.md`. `PROMPT_AUDIT_WAIT_MS < 0` disables auditing, `= 0` runs asynchronously, and `> 0` waits synchronously. Synchronous auditing blocks only an explicit `HTTP 200` response with `code=SUCCESS` and `data.action=REJECT`; audit service failures continue to degrade open. Audit payloads intentionally send the complete extracted text without an independent truncation limit and rely on the global request-body limit for safety. The default async audit queue capacity is `128`.
+
+**Streaming disconnect accounting:** `relay/helper/stream_scanner.go` intentionally continues reading the upstream stream after the downstream client disconnects so the final usage event remains available for billing. Do not restore tests or behavior that cancel the upstream read immediately on client disconnect.
+
+**Redemption purchase entry:** In `web/src/features/wallet/components/recharge-form-card.tsx`, a configured `topupLink` MUST render as an independent purchase button beside the redemption action area, with a vertical mobile layout and horizontal desktop layout. Do not regress it to a small inline text link.
 
 ### Project Governance
 
